@@ -1,79 +1,61 @@
-/* базовые ресеты */
-html, body {
-  margin: 0;
-  padding: 0;
-  width: 100%;
-  height: 100%;
-  background: transparent;        /* важно! фон окна прозрачный */
-  overflow: hidden;               /* убираем скроллбар */
-}
-::-webkit-scrollbar { display: none; }
-
-/* видимая «плита» окна */
-.app-container {
-  position: absolute;
-  inset: 0;
-  background: #111;               /* фон лаунчера */
-  overflow: hidden;
-  perspective: 800px;            /* для 3D-поворота кубиков */
+@font-face {
+  font-family: 'Orbitron';
+  src: url('https://fonts.googleapis.com/css2?family=Orbitron:wght@400;700&display=swap');
 }
 
-/* внутренний интерфейс */
-.content {
-  position: absolute;
-  inset: 0;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  color: #fff;
-  z-index: 1;
+/* базовая раскладка */
+html,body,#root { margin:0; width:100%; height:100%; background:#0c0c0f; overflow:hidden; font-family:'Orbitron',sans-serif; }
+
+.app-container { position:absolute; inset:0; display:flex; align-items:center; justify-content:center; }
+
+.logo { margin:0 0 2rem 0; font-size:2.6rem; background:linear-gradient(90deg,#16a34a 0%,#04d9ff 100%); -webkit-background-clip:text; color:transparent; }
+
+.content { display:flex; flex-direction:column; align-items:center; padding:2rem 3rem; border:1px solid rgba(255,255,255,.1); border-radius:18px; backdrop-filter:blur(12px); background:rgba(255,255,255,.05); box-shadow:0 8px 40px rgba(0,0,0,.6); }
+
+.select,.input,.play { width:260px; margin-bottom:1rem; border:none; outline:none; font-size:1rem; border-radius:8px; padding:.7rem 1rem; }
+
+.select,.input { background:rgba(0,0,0,.4); color:#fff; }
+.play { background:#16a34a; color:#fff; cursor:pointer; transition:transform .2s,box-shadow .2s; }
+.play:hover:not(:disabled) { transform:translateY(-2px); box-shadow:0 8px 20px rgba(22,163,74,.4); }
+.play:disabled { background:#3a3a3d; cursor:not-allowed; }
+
+.status { color:#a0a0a8; font-size:.9rem; }
+
+/* плитки */
+.piece{
+  position:absolute;
+  transform-style:preserve-3d;
+  transform-origin:center;
+  animation-name:flipPiece;
+  animation-fill-mode:forwards;
+  will-change:transform;
+}
+.face{
+  position:absolute;
+  inset:0;
+  background-size:cover;
+  backface-visibility:hidden;
+  border-radius:2px;
+}
+.back{ transform:rotateY(180deg); }
+
+@keyframes flipPiece{
+  0%   { transform:rotateY(0deg);   }
+  100% { transform:rotateY(180deg); }
 }
 
-/* маска-кубики */
-.cube-mask {
-  position: absolute;
-  inset: 0;
-  display: grid;
-  grid-gap: 1px;
-  pointer-events: none;
-  z-index: 2;
-}
+/* загрузчик */
+.loader-card { position:fixed; top:50%; left:50%; transform:translate(-50%,-50%); width:320px; padding:1.8rem 2rem; background:rgba(12,12,16,.9); border:1px solid rgba(255,255,255,.1); border-radius:18px; text-align:center; box-shadow:0 12px 40px rgba(0,0,0,.6); z-index:3; }
+.loader-card h2 { margin:0 0 1rem 0; font-size:1.3rem; color:#fff; }
 
-.cube-mask > div {
-  background: #111;               /* тот же цвет, что фон окна */
-  animation-fill-mode: forwards;
-  animation-name: cubeFade;
-}
+.progress-bar { width:100%; height:10px; background:rgba(255,255,255,.1); border-radius:6px; overflow:hidden; margin-bottom:.6rem; }
+.progress-fill { height:100%; background:linear-gradient(90deg,#04d9ff 0%,#16a34a 100%); }
 
-@keyframes cubeFade {
-  to { opacity: 0; transform: scale(0); }
-}
-
-/* простые стили полей / кнопок */
-.input       { padding: .5rem;  border-radius: 4px; border: 1px solid #444; width: 220px; margin-bottom: 1rem; }
-.play-button { padding: .8rem 1.6rem; border-radius: 8px; background:#16a34a; color:#fff; border:none; cursor:pointer; }
-.play-button:disabled { background:#4b5563; cursor:not-allowed; }
-.status { margin-top:.5rem; color:#aaa; font-size:.9rem; }
-.piece {
-  position: absolute;
-  transform-style: preserve-3d;
-  animation-fill-mode: forwards;
-  animation-name: flipPiece;
-}
-
-.piece .face {
-  position: absolute;
-  inset: 0;
-  background-size: cover;
-  backface-visibility: hidden;
-}
-
-.piece .back {
-  transform: rotateY(180deg);
-}
-
-@keyframes flipPiece {
-  from { transform: rotateY(0deg); }
-  to   { transform: rotateY(180deg); }
+.select option { background:#000; }
+/* контейнер с «перспективой» для 3D-эффекта */
+.tiles-wrapper{
+  position:fixed;
+  inset:0;
+  perspective:1200px;
+  z-index:5;
 }
