@@ -1,34 +1,35 @@
-/*  SexCraft Launcher — main (Electron 36 + TypeScript 5.9, 2025‑06‑20, v6 fix‑all)
+/*  SexCraft Launcher — main (Electron 36 + TypeScript 5.9, 2025‑06‑20, v7 auto‑dl‑anim+log)
  *  ✓ Temurin 21 GA        → 3‑step fallback (API → redirect → packages)
  *  ✓ NeoForge 21.1.57     (installer auto‑install)
  *  ✓ Vanilla 1.21.5 / NeoForge 1.21.1 “one‑click”
  *  ✓ Processor‑deps: много‑зеркальный скачиватель
+ *  ✓ Progress API: единая анимация для всех загрузок (JRE, JDK, Forge, ProcDeps, MC assets)
+ *  ✓ Файловое логирование: ~/.sexcraft/launcher.log  (electron‑log)
  *  ─────────────────────────────────────────────────────────────────────────────
- *  CHANGELOG
- *  # 2025‑06‑20  v6 fix‑all
- *    • PROC_DEPS: исправлен ‘javadoctors’ → ‘javadoctor’; убран дубль srgutils.
- *    • downloadWithRetry: fallback и на 4xx; эксп. задержка 1 → 2 → 4 s.
- *    • Единый массив MAVEN_REPOS; используется во всех ensure‑*.
- *    • ensureInstallertools/ensureNeoForgeInstaller: добавлен fallback.
- *    • parseGAV: надёжное разбор GAV; поддержка classifier/ext.
- *    • Доп. события прогресса → UI.
+ *  CHANGELOG v7 auto‑dl‑anim+log
+ *    • Единый тэг progress‑событий: теперь любой скачиваемый ресурс сообщает
+ *      в UI {tag:string,pct:number} → красивая анимация для *любой* загрузки.
+ *    • Поддержка события ‘minecraft’ от minecraft‑launcher‑core (assets & libs).
+ *    • electron‑log: запись trace / info / warn / error в файл + консоль.
+ *    • Мелкие правки типов, JSDoc‑пояснения, косметика.
  *  ------------------------------------------------------------------------- */
 
-import { app, BrowserWindow, ipcMain } from 'electron';
+import { app, BrowserWindow, ipcMain }   from 'electron';
 import {
-  createWriteStream, existsSync, mkdirSync, readdirSync,
-  rmSync, writeFileSync,
-} from 'node:fs';
-import path from 'node:path';
-import https from 'node:https';
-import AdmZip from 'adm-zip';
-import { setTimeout as delay } from 'node:timers/promises';
-import { v4 as uuidv4 } from 'uuid';
-import { Client } from 'minecraft-launcher-core';
-import { writeUncompressed, NBT } from 'prismarine-nbt';
+  createWriteStream, existsSync, mkdirSync,
+  readdirSync, rmSync, writeFileSync,
+}                                      from 'node:fs';
+import path                            from 'node:path';
+import https                           from 'node:https';
+import AdmZip                          from 'adm-zip';
+import { setTimeout as delay }         from 'node:timers/promises';
+import { v4 as uuidv4 }                from 'uuid';
+import { Client }                      from 'minecraft-launcher-core';
+import { writeUncompressed, NBT }      from 'prismarine-nbt';
+import log                             from 'electron-log';
 
 /* ───────────────────── webpack constants ───────────────────── */
-declare const MAIN_WINDOW_WEBPACK_ENTRY : string;
+declare const MAIN_WINDOW_WEBPACK_ENTRY    : string;
 declare const MAIN_WINDOW_PRELOAD_WEBPACK_ENTRY : string;
 
 /* ──────────────── версии Minecraft и NeoForge ──────────────── */
@@ -52,7 +53,7 @@ const PROC_DEPS = [
 
   /* Javadoctor (fixed groupId) */
   'net.neoforged.javadoctor:gson-io:2.0.17',
-  'net.neoforged.javadoctor:spec:2.0.17',        // ← fix
+  'net.neoforged.javadoctor:spec:2.0.17',
 
   /* Misc */
   'net.neoforged:srgutils:1.0.10',
@@ -77,16 +78,23 @@ const PROC_DEPS = [
 ] as const;
 
 /* ─────────────────────────── директории ───────────────────────── */
-const ROOT    = path.join(app.getPath('userData'), '.sexcraft');
-const RUNTIME = path.join(ROOT, 'runtime');
-const CACHE   = path.join(ROOT, 'cache');
+const ROOT     = path.join(app.getPath('userData'), '.sexcraft');
+const RUNTIME  = path.join(ROOT, 'runtime');
+const CACHE    = path.join(ROOT, 'cache');
+const LOG_FILE = path.join(ROOT, 'launcher.log');
 const JAVA_EXE = process.platform === 'win32' ? 'javaw.exe' : 'java';
+
+/* ──────────────────────────── логирование ─────────────────────────── */
+log.transports.file.resolvePath = () => LOG_FILE;
+log.initialize({ preload: true });
+log.info('=== SexCraft Launcher started ===');
 
 /* ───────────────────────────── типы ──────────────────────────── */
 type OS   = 'windows' | 'mac' | 'linux';
 type Arch = 'x64' | 'aarch64';
 interface FixedServer { name:string; ip:string; port:number }
 interface LaunchOpts  { username:string; mode:'vanilla'|'modded'; server:FixedServer }
+type DlTag = 'jre'|'jdk'|'forge'|'procdep'|'minecraft';
 
 /* ╭── helpers ──╮ */
 const offlineAuth = (n:string)=>({
@@ -120,7 +128,7 @@ async function fetchTemurinLink(os:OS, arch:Arch, img:'jre'|'jdk'){
         try{
           const link = JSON.parse(raw)?.[0]?.binary?.package?.link;
           link?res(link):rej(new Error('link not found'));
-        }catch{ rej(new Error('bad JSON')); }
+        }catch(err){ rej(err); }
       });
     }).on('error',rej);
   });
@@ -129,21 +137,22 @@ async function fetchTemurinLink(os:OS, arch:Arch, img:'jre'|'jdk'){
 
 /* ╭───────── downloader (+retry+mirror) ─────────╮ */
 async function downloadWithRetry(
-  tag:'jre'|'jdk'|'forge'|'procdep',
+  tag:DlTag,                       // ⟵ отображается в UI, логах
   url:string,
   dest:string,
   w:BrowserWindow,
   tries=3,
 ){
   mkdirSync(path.dirname(dest),{recursive:true});
-
   let attempt = url;
+
   for(let i=1;i<=tries;i++){
     try{
       await new Promise<void>((res,rej)=>{
         const file = createWriteStream(dest);
-        let done=0,total=0;
+        let done = 0, total = 0;
         send(w,'download-start',{tag,url:attempt});
+        log.debug(`[DL] start ${tag} → ${attempt}`);
 
         https.get(attempt,r=>{
           /* redirection */
@@ -160,21 +169,26 @@ async function downloadWithRetry(
           total = Number(r.headers['content-length']??0);
           r.on('data',b=>{
             done += (b as Buffer).length;
-            if(total) send(w,'download-progress',{tag,pct:Math.floor(done/total*100)});
+            if(total){
+              const pct = Math.floor(done/total*100);
+              send(w,'download-progress',{tag,pct});
+            }
           });
           r.pipe(file);
           file.on('finish',()=>file.close(e=>e?rej(e):(send(w,'download-done',{tag}),res())));
         }).on('error',rej);
       });
+      log.info(`[DL] done  ${tag}`);
       return; // success
     }catch(err:any){
       if(existsSync(dest)) rmSync(dest);
-      /* если есть ещё попытки — подождать эксп. время и попробовать снова */
+      log.warn(`[DL] fail ${tag} try ${i}/${tries}: ${err.message||err}`);
       if(i<tries){
-        await delay(1000*2**(i-1));
+        await delay(1000*2**(i-1));  // экспоненциальная пауза
         continue;
       }
       send(w,'download-error',{tag,url:attempt,err:err.message});
+      log.error(`[DL] abort ${tag}: ${err.stack||err}`);
       throw err;
     }
   }
@@ -184,17 +198,17 @@ async function downloadWithRetry(
 /* ───────── ensure Java 21 ───────── */
 async function ensureJava(w:BrowserWindow):Promise<string>{
   const bundled = path.join(process.resourcesPath,'jre','bin',JAVA_EXE);
-  if(existsSync(bundled)) return bundled;
+  if(existsSync(bundled)){ log.info('Using bundled JRE'); return bundled; }
 
   mkdirSync(RUNTIME,{recursive:true});
   mkdirSync(CACHE,{recursive:true});
 
   const cached = readdirSync(RUNTIME,{withFileTypes:true})
     .find(d=>d.isDirectory() && /(jre|jdk)-21/.test(d.name));
-  if(cached) return path.join(RUNTIME,cached.name,'bin',JAVA_EXE);
+  if(cached){ log.info('Using cached JRE'); return path.join(RUNTIME,cached.name,'bin',JAVA_EXE); }
 
   const os:OS   = process.platform==='win32' ? 'windows'
-                : process.platform==='darwin'? 'mac' : 'linux';
+                : process.platform==='darwin'? 'mac'     : 'linux';
   const arch:Arch = process.arch==='arm64' ? 'aarch64' : 'x64';
   const zip = path.join(CACHE,'temurin-runtime.zip');
 
@@ -210,7 +224,7 @@ async function ensureJava(w:BrowserWindow):Promise<string>{
     /* если JRE отсутствует → пробуем JDK */
     const mirror = githubToPackages(e.message??'');
     if(mirror){ await downloadWithRetry('jdk',mirror,zip,w); }
-    else{ console.warn('[Temurin] JRE 404 → fallback JDK'); await tryDownload('jdk'); }
+    else{ log.warn('[Temurin] JRE 404 → fallback JDK'); await tryDownload('jdk'); }
   }
 
   /* распаковка */
@@ -359,13 +373,24 @@ ipcMain.handle('launch-minecraft',async(_e,opts:LaunchOpts)=>{
     }
 
     const launcher = new Client();
-    launcher.on('download-status',s=>send(win!,'download-status',s));
-    launcher.on('debug',d=>console.log('[debug]',d));
+    /* прокидываем все статусы загрузок модов, ресурсов и т.д. */
+    launcher.on('download-status',s=>{
+      const pct = s.total ? Math.floor(s.downloaded/s.total*100) : 0;
+      send(win!,'download-progress',{tag:'minecraft',pct});
+    });
+    launcher.on('debug',d=>log.debug('[MC]',d));
     launcher.on('data',d=>process.stdout.write(d));
-    launcher.on('error',e=>send(win!,'launch-error',e.message));
+    launcher.on('error',e=>{
+      send(win!,'launch-error',e.message);
+      log.error('[MC]',e);
+    });
+
+    log.info(`Launching Minecraft (${opts.mode}) for ${opts.username}`);
     await launcher.launch(cfg);
+    log.info('Launcher returned control (game detached)');
   }catch(err:any){
     send(win!,'launch-error',err.message??String(err));
+    log.error('launch‑minecraft IPC error',err);
     throw err;
   }
 });

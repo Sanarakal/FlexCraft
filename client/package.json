@@ -54,6 +54,7 @@
     "@xmcl/core": "^2.4.2",
     "@xmcl/installer": "^6.1.0",
     "autoprefixer": "^10.4.21",
+    "electron-log": "^5.4.1",
     "electron-squirrel-startup": "^1.0.1",
     "html2canvas": "^1.4.1",
     "minecraft-launcher-core": "^3.18.2",
