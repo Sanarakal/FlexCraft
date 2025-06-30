@@ -1,13 +1,14 @@
 import { contextBridge, ipcRenderer, IpcRendererEvent } from 'electron';
 
-export interface IElectronAPI {
-  invoke<T = unknown>(channel: string, args?: any): Promise<T>;
-  on(channel: string, listener: (e: IpcRendererEvent, data: any) => void): void;
-}
+type Listener = (ev: IpcRendererEvent, ...args: unknown[]) => void;
 
-const api: IElectronAPI = {
-  invoke: (c, a) => ipcRenderer.invoke(c, a),
-  on   : (c, fn) => ipcRenderer.on(c, fn),
-};
+contextBridge.exposeInMainWorld('electron', {
+  /** слушаем однократно либо постоянно */
+  on   : (channel: string, listener: Listener) => ipcRenderer.on(channel, listener),
 
-contextBridge.exposeInMainWorld('electron', api);
+  /** отписываем слушатель (Electron ≥ 14: removeListener ≈ off) */
+  off  : (channel: string, listener: Listener) => ipcRenderer.removeListener(channel, listener),
+
+  /** invoke/handle RPC */
+  invoke: (channel: string, ...args: unknown[]) => ipcRenderer.invoke(channel, ...args),
+});
