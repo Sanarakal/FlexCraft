@@ -11,4 +11,5 @@ contextBridge.exposeInMainWorld('electron', {
 
   /** invoke/handle RPC */
   invoke: (channel: string, ...args: unknown[]) => ipcRenderer.invoke(channel, ...args),
+  snapshot: () => ipcRenderer.invoke('snapshot-ui'),
 });

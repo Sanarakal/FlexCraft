@@ -1,7 +1,7 @@
 /*
- * SexCraft Launcher – main process (patch 2)
- * ➥ Fixed: recognise current/total and task/total progress payloads
- * 2025-06-30
+ * SexCraft Launcher – main process (patch 3)
+ * ➥ Fixed: initial bogus 100 % progress spike on “Play” click
+ * 2025-07-02
  */
 
 import { app, BrowserWindow, ipcMain }   from 'electron';
@@ -21,7 +21,11 @@ import { pipeline }                    from 'node:stream';
 import { promisify }                   from 'node:util';
 
 const pump = promisify(pipeline);
-
+ipcMain.handle('snapshot-ui', async () => {
+  if (!win) throw new Error('window not ready');
+  const img = await win.webContents.capturePage();   // нативный PNG
+  return img.toPNG().toString('base64');             // вернём base64-строку
+});
 /* ───────────────────── webpack constants ───────────────────── */
 declare const MAIN_WINDOW_WEBPACK_ENTRY        : string;
 declare const MAIN_WINDOW_PRELOAD_WEBPACK_ENTRY: string;
@@ -81,7 +85,7 @@ const JAVA_EXE = process.platform === 'win32' ? 'java.exe' : 'java';
 /* ──────────────────────────── логирование ────────────────────── */
 log.transports.file.resolvePath = () => LOG_FILE;
 log.initialize({ preload: true });
-log.info('=== SexCraft Launcher started (patch 2) ===');
+log.info('=== SexCraft Launcher started (patch 3) ===');
 
 const DEBUG_PROGRESS = true;
 
@@ -427,7 +431,7 @@ function toPercent(obj: any): number | undefined {
   if (typeof obj?.current === 'number' && typeof obj?.total === 'number' && obj.total > 0)
     return obj.current / obj.total * 100;
 
-  /* 3. task/total */
+  /* 3. task/total (дублируем для безопасности) */
   if(typeof obj?.task==='number' && typeof obj?.total==='number' && obj.total>0)
     return obj.task/obj.total*100;
 
@@ -503,10 +507,16 @@ ipcMain.handle('launch-minecraft',async(_e,opts:LaunchOpts)=>{
     const launcher=new Client();
     let hasProgress=false;
 
+    /* ╭── FIX: стабильная шкала прогресса ─────╮ */
     const pushPct=(()=>{
       let last=-1;
+      let started=false;        // игнорируем первый ложный 100 %
       return(val:number)=>{
         const pct=Math.max(0,Math.min(100,Math.round(val)));
+        if(!started){
+          if(pct>=100) return;  // пропускаем преждевременный complete
+          started=true;
+        }
         if(pct!==last){
           last=pct;
           send(w,'download-progress',{tag:'minecraft',pct});
@@ -514,6 +524,7 @@ ipcMain.handle('launch-minecraft',async(_e,opts:LaunchOpts)=>{
         }
       };
     })();
+    /* ╰────────────────────────────────────────╯ */
 
     const onAnyProgress=(payload:ProgressObj|number,src:string)=>{
       debugProgress(src,payload);
@@ -559,6 +570,7 @@ ipcMain.handle('launch-minecraft',async(_e,opts:LaunchOpts)=>{
     throw err;
   }
 });
+
 /* ───────── IPC: close-window ───────── */
 ipcMain.handle('close-window', async () => {
   log.info('[IPC] close-window');          // необязательно, но полезно

@@ -7,6 +7,7 @@ export interface IElectronAPI {
   on   : (channel: string, listener: (...args: any[]) => void) => void;
   off  : (channel: string, listener: (...args: any[]) => void) => void;
   invoke: (channel: string, ...args: any[]) => Promise<any>;
+  snapshot(): Promise<string>;
 }
 
 declare global {
