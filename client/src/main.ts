@@ -1,31 +1,40 @@
-/*
- * SexCraft Launcher – main process (patch 3)
- * ➥ Fixed: initial bogus 100 % progress spike on “Play” click
- * 2025-07-02
- */
+/* -------------------------------------------------------------------------- */
+/*  SexCraft Launcher – main process (patch 7, Custom ModPack support)        */
+/*  ➥ Changes since patch 6:                                                  *
+/*     • Removed hard‑wired Arcana modpack logic                              *
+/*     • Added generic ensureCustomModpack():                                 *
+/*         – version / URL / SHA‑256 via env vars (MODPACK_VER / …)           *
+/*         – safely no‑op if MODPACK_URL unset                                *
+/*     • launch‑minecraft now calls ensureCustomModpack()                     *
+/*  2025‑07‑16                                                                */
+/* -------------------------------------------------------------------------- */
 
-import { app, BrowserWindow, ipcMain }   from 'electron';
+import { app, BrowserWindow, ipcMain }          from 'electron';
 import {
-  createWriteStream, existsSync, mkdirSync,
-  readdirSync, rmSync, writeFileSync,
-}                                      from 'node:fs';
-import path                            from 'node:path';
-import https                           from 'node:https';
-import AdmZip                          from 'adm-zip';
-import { setTimeout as delay }         from 'node:timers/promises';
-import { v4 as uuidv4 }                from 'uuid';
-import { Client }                      from 'minecraft-launcher-core';
-import { writeUncompressed, NBT }      from 'prismarine-nbt';
-import log                             from 'electron-log';
-import { pipeline }                    from 'node:stream';
-import { promisify }                   from 'node:util';
+  createWriteStream, createReadStream, existsSync, mkdirSync,
+  readdirSync, rmSync, writeFileSync, readFileSync, renameSync,
+}                                               from 'node:fs';
+import path                                     from 'node:path';
+import https                                    from 'node:https';
+import AdmZip                                   from 'adm-zip';
+import tar                                      from 'tar';
+import { setTimeout as delay }                  from 'node:timers/promises';
+import { v4 as uuidv4 }                         from 'uuid';
+import { Client }                               from 'minecraft-launcher-core';
+import { writeUncompressed, NBT }               from 'prismarine-nbt';
+import log                                      from 'electron-log';
+import { pipeline }                             from 'node:stream';
+import { promisify }                            from 'node:util';
+import { createHash }                           from 'node:crypto';
 
 const pump = promisify(pipeline);
-ipcMain.handle('snapshot-ui', async () => {
-  if (!win) throw new Error('window not ready');
-  const img = await win.webContents.capturePage();   // нативный PNG
-  return img.toPNG().toString('base64');             // вернём base64-строку
-});
+
+/* ──────────────── пользовательский мод‑пак ──────────────── *
+ * Включается **только** если указана переменная MODPACK_URL. */
+const MODPACK_VER   = process.env.MODPACK_VER   ?? '1.0';
+const MODPACK_URL   = process.env.MODPACK_URL   ?? '';     // «»  → пропустить загрузку
+const MODPACK_SHA256= process.env.MODPACK_SHA256?? '';     // «»  → пропустить проверку
+
 /* ───────────────────── webpack constants ───────────────────── */
 declare const MAIN_WINDOW_WEBPACK_ENTRY        : string;
 declare const MAIN_WINDOW_PRELOAD_WEBPACK_ENTRY: string;
@@ -33,7 +42,7 @@ declare const MAIN_WINDOW_PRELOAD_WEBPACK_ENTRY: string;
 /* ──────────────── версии Minecraft и NeoForge ──────────────── */
 const VANILLA_VERSION    = '1.21.5';
 const NEOFORGE_VERSION   = '1.21.1';
-const NEOFORGE_MAVEN_VER = '21.1.57';
+const NEOFORGE_MAVEN_VER = '21.1.170';
 const INSTALLERTOOLS_VER = '2.1.4';
 
 /* ───── Maven зеркала (приоритет сверху) ───── */
@@ -42,7 +51,7 @@ const MAVEN_REPOS = [
   'https://repo1.maven.org/maven2',
 ] as const;
 
-/* ───── Processor-dependencies ───── */
+/* ───── Processor‑dependencies ───── */
 const PROC_DEPS = [
   /* Installertools */
   `net.neoforged.installertools:cli-utils:${INSTALLERTOOLS_VER}`,
@@ -85,9 +94,9 @@ const JAVA_EXE = process.platform === 'win32' ? 'java.exe' : 'java';
 /* ──────────────────────────── логирование ────────────────────── */
 log.transports.file.resolvePath = () => LOG_FILE;
 log.initialize({ preload: true });
-log.info('=== SexCraft Launcher started (patch 3) ===');
+log.info('=== SexCraft Launcher started (patch 7) ===');
 
-const DEBUG_PROGRESS = true;
+const DEBUG_PROGRESS = !!process.env.LAUNCHER_DEBUG;
 
 /* ───────────────────────────── типы ──────────────────────────── */
 type OS   = 'windows' | 'macos' | 'linux';
@@ -95,7 +104,7 @@ type Arch = 'x64' | 'aarch64';
 interface FixedServer { name:string; ip:string; port:number }
 interface LaunchOpts  { username:string; mode:'vanilla'|'modded'; server:FixedServer }
 
-type DlTag = 'java'|'forge'|'procdep'|'minecraft';
+type DlTag = 'java'|'forge'|'procdep'|'minecraft'|'modpack';
 
 interface ProgressObj {
   percent?: number;
@@ -106,8 +115,8 @@ interface ProgressObj {
   downloadedBytes?: number;
   totalBytes?: number;
   completed?: number;
-  current?: number;   // new current/total pair
-  task?: number;      // asset task/total
+  current?: number;
+  task?: number;
 }
 
 /* ╭── helpers ──╮ */
@@ -119,6 +128,14 @@ const send = <T>(w:BrowserWindow, ev:string, payload:T)=>{
   if (!w.isDestroyed()) w.webContents.send(ev,payload);
 };
 const toPosix = (p:string)=>p.replace(/\\/g,'/');
+
+/* ──────────────── snapshot‑ui IPC ──────────────── */
+let win:BrowserWindow|null=null;
+ipcMain.handle('snapshot-ui', async () => {
+  if (!win) throw new Error('window not ready');
+  const img = await win.webContents.capturePage();
+  return img.toPNG().toString('base64');
+});
 
 /* ╭────────────── Temurin helpers ───────────────╮ */
 function assetsApi(os:OS, arch:Arch, img:'jre'|'jdk'){
@@ -132,7 +149,6 @@ function githubToPackages(link: string) {
   const m = link.match(/\/download\/([^/]+)\/(OpenJDK.*\.(?:zip|tar\.gz))$/i);
   return m ? `https://packages.adoptium.net/artifactory/temurin/21/ga/${m[1]}/${m[2]}` : undefined;
 }
-
 async function fetchTemurinLink(os:OS, arch:Arch, img:'jre'|'jdk'){
   return new Promise<string>((res,rej)=>{
     https.get({host:'api.adoptium.net',path:assetsApi(os,arch,img)},r=>{
@@ -153,7 +169,14 @@ async function fetchTemurinLink(os:OS, arch:Arch, img:'jre'|'jdk'){
 async function headOk(url:string){
   return new Promise<boolean>(resolve=>{
     const req = https.request(url,{method:'HEAD'},res=>{
-      resolve(res.statusCode!==undefined && res.statusCode<400);
+      /* на некоторых зеркалах HEAD отдаёт 307/308 → fallback на GET */
+      if(res.statusCode!==undefined && res.statusCode>=200 && res.statusCode<400){
+        resolve(true); return;
+      }
+      if(res.statusCode===307||res.statusCode===308){
+        resolve(true); return;
+      }
+      resolve(false);
     });
     req.on('error',()=>resolve(false));
     req.end();
@@ -176,7 +199,7 @@ async function downloadWithRetry(
           /* redirect */
           if(r.statusCode && r.statusCode>=300 && r.statusCode<400 && r.headers.location){
             r.resume();
-            attempt=r.headers.location;
+            attempt=r.headers.location!;
             downloadWithRetry(tag,attempt,dest,w,tries).then(res).catch(rej);
             return;
           }
@@ -258,32 +281,44 @@ async function ensureJava(w:BrowserWindow):Promise<string>{
   const os :OS  = process.platform==='win32'?'windows'
                 : process.platform==='darwin'?'macos':'linux';
   const arch:Arch=process.arch==='arm64'?'aarch64':'x64';
-  const zip=path.join(CACHE,'temurin-runtime.zip');
+  const archive=path.join(CACHE,'temurin-runtime'); // без расширения заранее
 
   const tryDownload=async(img:'jre'|'jdk')=>{
     let link:string;
     try{link=await fetchTemurinLink(os,arch,img);}
     catch{link=redirectApi(os,arch,img);}
-    await downloadWithRetry('java',link,zip,w);
+    const ext = link.endsWith('.zip')?'.zip':'.tar.gz';
+    await downloadWithRetry('java',link,archive+ext,w);
+    return ext;
   };
 
-  try{await tryDownload('jre');}
+  let ext:string;
+  try{ext = await tryDownload('jre');}
   catch(e:any){
     const mirror=githubToPackages(e.message??'');
-    if(mirror) await downloadWithRetry('java',mirror,zip,w);
-    else{log.warn('[Temurin] JRE 404 → fallback JDK');await tryDownload('jdk');}
+    if(mirror){ ext = mirror.endsWith('.zip')?'.zip':'.tar.gz';
+      await downloadWithRetry('java',mirror,archive+ext,w);
+    }else{log.warn('[Temurin] JRE 404 → fallback JDK');ext = await tryDownload('jdk');}
   }
 
   /* распаковка */
   send(w,'download-progress',{tag:'java',pct:95});
-  const z=new AdmZip(zip);
-  z.extractAllTo(RUNTIME,true);
+  if(ext==='.zip'){
+    new AdmZip(archive+ext).extractAllTo(RUNTIME,true);
+  }else{
+    await tar.x({file:archive+ext,cwd:RUNTIME,strip:0});
+  }
   send(w,'download-progress',{tag:'java',pct:100});
   send(w,'download-done',{tag:'java'});
 
+  /* определяем реальный bin‑путь */
   const unpacked=readdirSync(RUNTIME).find(d=>d.startsWith('jre')||d.startsWith('jdk'));
   if(!unpacked) throw new Error('Temurin unpack failed');
-  return path.join(RUNTIME,unpacked,'bin',JAVA_EXE);
+  const rootDir=path.join(RUNTIME,unpacked);
+  /* macOS: bin лежит внутри Contents/Home */
+  const macHome=path.join(rootDir,'Contents','Home');
+  const binDir=existsSync(macHome)?path.join(macHome,'bin'):path.join(rootDir,'bin');
+  return path.join(binDir,JAVA_EXE);
 }
 
 /* ───────── installertools (один JAR) ───────── */
@@ -307,7 +342,7 @@ async function ensureInstallertools(w:BrowserWindow){
   throw new Error('installertools download failed');
 }
 
-/* ──────────── processor-deps (bulk) ──────────── */
+/* ──────────── processor‑deps (bulk) ──────────── */
 interface GAV{group:string;artifact:string;version:string;classifier?:string;ext:string}
 function parseGAV(raw:string):GAV{
   const [coords,ext='jar']=raw.split('@',2);
@@ -319,11 +354,15 @@ function parseGAV(raw:string):GAV{
 }
 
 async function ensureProcessorDeps(w:BrowserWindow){
+  const stillMissing:Set<string>=new Set();
+
   const missing=PROC_DEPS.filter(raw=>{
     const {group,artifact,version,classifier,ext}=parseGAV(raw);
     const relDir=path.join(...group.split('.'),artifact,version);
     const file  =`${artifact}-${version}${classifier?`-${classifier}`:''}.${ext}`;
-    return !existsSync(path.join(ROOT,'libraries',relDir,file));
+    const found=!existsSync(path.join(ROOT,'libraries',relDir,file));
+    if(found) stillMissing.add(raw);
+    return found;
   });
 
   if(missing.length===0) return;
@@ -341,19 +380,27 @@ async function ensureProcessorDeps(w:BrowserWindow){
     const dst   =path.join(ROOT,'libraries',relDir,file);
 
     const relPosix=`${toPosix(relDir)}/${encodeURIComponent(file)}`;
+    let ok=false;
     for(const repo of MAVEN_REPOS){
       const full=`${repo}/${relPosix}`;
       if(!(await headOk(full))) continue;
       try{
         await downloadWithRetry('procdep',full,dst,w);
-        break;
+        ok=true; break;
       }catch{/* next mirror */}
     }
+    if(!ok) log.error('[PROCDEP] failed',raw);
+    else    stillMissing.delete(raw);
     done++;tick();
   });
 
   await runLimited(6,tasks);
-  send(w,'download-done',{tag:'procdep'});
+
+  tick(); send(w,'download-done',{tag:'procdep'});
+
+  if(stillMissing.size){
+    throw new Error(`Processor‑deps missing: ${Array.from(stillMissing).join(', ')}`);
+  }
 }
 
 /* ───────── NeoForge installer ───────── */
@@ -392,8 +439,123 @@ function writeServersDat(root:string,s:FixedServer){
   writeFileSync(path.join(root,'servers.dat'),writeUncompressed(nbt));
 }
 
+/* ───────── SHA‑256 helper ───────── */
+async function sha256File(file:string):Promise<string>{
+  return new Promise<string>((res,rej)=>{
+    const hash=createHash('sha256');
+    const s=createReadStream(file);
+    s.on('error',rej);
+    s.on('data',d=>hash.update(d));
+    s.on('end',()=>res(hash.digest('hex')));
+  });
+}
+
+/* ───────── Custom modpack ensure/install ───────── */
+async function ensureCustomModpack(w: BrowserWindow) {
+  /* Если MODPACK_URL не задан – ничего не делаем. */
+  if (!MODPACK_URL) {
+    log.info('No custom modpack URL provided – skipping modpack step');
+    return;
+  }
+
+  const sentinel = path.join(ROOT, '.modpack_version.txt');
+
+  /* 1. Уже нужная версия? */
+  let current: string | null = null;
+  try   { current = readFileSync(sentinel, 'utf8').trim(); }
+  catch { /* файла нет – устанавливаем */ }
+
+  if (current === MODPACK_VER) {
+    log.info('Custom modpack already installed');
+    return;
+  }
+
+  /* 2. Скачиваем ZIP и (опционально) проверяем хэш */
+  mkdirSync(CACHE, { recursive: true });
+  const fname = `modpack-${MODPACK_VER}.zip`;
+  const zip = path.join(CACHE, fname);
+  await downloadWithRetry('modpack', MODPACK_URL, zip, w);
+
+  if (MODPACK_SHA256) {
+    const actual = await sha256File(zip);
+    if (actual.toLowerCase() !== MODPACK_SHA256.toLowerCase()) {
+      send(w, 'download-error',
+        { tag: 'modpack', url: MODPACK_URL, err: 'SHA-256 mismatch' });
+      throw new Error(
+        `Modpack SHA-256 mismatch: expected ${MODPACK_SHA256}, got ${actual}`,
+      );
+    }
+    log.info('Modpack SHA-256 verified');
+  } else {
+    log.info('SHA‑256 check skipped (no MODPACK_SHA256)');
+  }
+
+  /* 3. Чистим старое содержимое (mods, config, …) */
+  ['mods', 'config', 'resourcepacks', 'kubejs', 'defaultconfigs'].forEach(d =>
+    rmSync(path.join(ROOT, d), { recursive: true, force: true }));
+
+  /* 4. Распаковка архива в корень лаунчера */
+  send(w, 'download-progress', { tag: 'modpack', pct: 90 });
+  new AdmZip(zip).extractAllTo(ROOT, true);
+
+  /* 5. Плоская или обёртка? (аналогично прежней логике) */
+  let wrapper: string | null = null;
+
+  /* 5‑A. overrides/  или  <wrapper>/overrides/ */
+  for (const d of readdirSync(ROOT, { withFileTypes: true })) {
+    if (!d.isDirectory()) continue;
+    if (d.name.toLowerCase() === 'overrides') {
+      wrapper = path.join(ROOT, d.name);
+    } else {
+      const inner = path.join(ROOT, d.name, 'overrides');
+      if (existsSync(inner)) wrapper = inner;
+    }
+    if (wrapper) break;
+  }
+
+  /* 5‑B. fallback – обёртка без overrides, но с mods */
+  if (!wrapper) {
+    for (const d of readdirSync(ROOT, { withFileTypes: true })) {
+      if (!d.isDirectory()) continue;
+      const candidate = path.join(ROOT, d.name);
+      if (existsSync(path.join(candidate, 'mods'))) {
+        wrapper = candidate;
+        break;
+      }
+    }
+  }
+
+  /* 6. Если wrapper найден – переносим каталоги наверх */
+  if (wrapper) {
+    const targets = ['mods', 'config', 'resourcepacks', 'kubejs', 'defaultconfigs'];
+    for (const dir of targets) {
+      const src = path.join(wrapper, dir);
+      if (!existsSync(src)) continue;
+
+      const dst = path.join(ROOT, dir);
+      rmSync(dst, { recursive: true, force: true });
+      mkdirSync(dst, { recursive: true });
+
+      readdirSync(src, { withFileTypes: true }).forEach(e => {
+        renameSync(path.join(src, e.name), path.join(dst, e.name));
+      });
+    }
+
+    /* удаляем сам wrapper / overrides */
+    rmSync(wrapper, { recursive: true, force: true });
+    log.info('Custom modpack flattened');
+  } else {
+    log.info('Custom modpack is already flat – no wrapper detected');
+  }
+
+  /* 7. Завершаем */
+  send(w, 'download-progress', { tag: 'modpack', pct: 100 });
+  send(w, 'download-done',     { tag: 'modpack' });
+  writeFileSync(sentinel, MODPACK_VER);
+  log.info('Custom modpack unpacked');
+}
+
 /* ───────── Electron window ───────── */
-let win:BrowserWindow|null=null;
 function createWindow(){
   win=new BrowserWindow({
     width:1100,height:720,frame:false,resizable:false,transparent:true,
@@ -412,50 +574,34 @@ app.on('window-all-closed',()=>process.platform!=='darwin'&&app.quit());
 app.on('activate',()=>BrowserWindow.getAllWindows().length===0&&createWindow());
 
 /* ╭── адаптер процента ────────────────╮ */
-function toPercent(obj: any): number | undefined {
+function toPercent(obj:any):number|undefined{
+  if(obj?.type==='assets'&&obj?.current!==undefined&&obj?.task===undefined)
+    return undefined;
 
-  /* ── пропускаем пер-файловые скачки ── */
-  if (obj?.type === 'assets' && obj?.current !== undefined && obj?.task === undefined)
-    return undefined;          // <-- просто не считаем этот ивент
+  if(typeof obj?.downloadedBytes==='number'&&typeof obj?.totalBytes==='number'&&obj.totalBytes>0)
+    return obj.downloadedBytes/obj.totalBytes*100;
 
-  /* 0. downloadedBytes/totalBytes */
-  if (typeof obj?.downloadedBytes === 'number' &&
-      typeof obj?.totalBytes      === 'number' && obj.totalBytes > 0)
-    return obj.downloadedBytes / obj.totalBytes * 100;
-
-  /* 1. task/total (общий прогресс assets) */
-  if (typeof obj?.task === 'number' && typeof obj?.total === 'number' && obj.total > 0)
-    return obj.task / obj.total * 100;
-
-  /* 2. current/total (другие теги) */
-  if (typeof obj?.current === 'number' && typeof obj?.total === 'number' && obj.total > 0)
-    return obj.current / obj.total * 100;
-
-  /* 3. task/total (дублируем для безопасности) */
-  if(typeof obj?.task==='number' && typeof obj?.total==='number' && obj.total>0)
+  if(typeof obj?.task==='number'&&typeof obj?.total==='number'&&obj.total>0)
     return obj.task/obj.total*100;
 
-  /* 4. plain number */
-  if(typeof obj==='number' && Number.isFinite(obj))
+  if(typeof obj?.current==='number'&&typeof obj?.total==='number'&&obj.total>0)
+    return obj.current/obj.total*100;
+
+  if(typeof obj==='number'&&Number.isFinite(obj))
     return obj>1?obj:obj*100;
 
-  /* 5. percentage */
   if(typeof obj?.percentage==='number')
     return obj.percentage;
 
-  /* 6. percent */
   if(typeof obj?.percent==='number')
     return obj.percent;
 
-  /* 7. progress */
   if(typeof obj?.progress==='number')
     return obj.progress>1?obj.progress:obj.progress*100;
 
-  /* 8. downloaded/total */
-  if(typeof obj?.downloaded==='number' && typeof obj?.total==='number' && obj.total>0)
+  if(typeof obj?.downloaded==='number'&&typeof obj?.total==='number'&&obj.total>0)
     return obj.downloaded/obj.total*100;
 
-  /* 9. value */
   if(typeof obj?.value==='number')
     return obj.value>1?obj.value:obj.value*100;
 
@@ -469,13 +615,12 @@ function debugProgress(tag:string,payload:any){
   console.debug(`[DBG] ${tag}:`,payload);
 }
 
-/* ───────── IPC: launch Minecraft ───────── */
+/* ───────── IPC: launch-minecraft ───────── */
 ipcMain.handle('launch-minecraft',async(_e,opts:LaunchOpts)=>{
   if(!win) return;
   const w=win!;
 
   try{
-    /* подготовка */
     writeServersDat(ROOT,opts.server);
 
     const java=await ensureJava(w);
@@ -488,33 +633,32 @@ ipcMain.handle('launch-minecraft',async(_e,opts:LaunchOpts)=>{
       root:ROOT,
       version,
       javaPath:java,
-      memory:{min:'2G',max:'4G'},
+      memory:{min:'8G',max:'12G'},
       detached:true,
       extraArgs:['--server',`${opts.server.ip}:${opts.server.port}`],
     };
 
     if(opts.mode==='modded'){
+      await ensureCustomModpack(w);   /* << заменили вызов */
       await ensureInstallertools(w);
       await ensureProcessorDeps(w);
       cfg.forge=await ensureNeoForgeInstaller(w);
       cfg.forgeAutoInstall=true;
     }
 
-    /* старт карточки */
     send(w,'download-start',{tag:'minecraft',url:''});
     send(w,'download-progress',{tag:'minecraft',pct:0});
 
     const launcher=new Client();
     let hasProgress=false;
 
-    /* ╭── FIX: стабильная шкала прогресса ─────╮ */
     const pushPct=(()=>{
       let last=-1;
-      let started=false;        // игнорируем первый ложный 100 %
+      let started=false;
       return(val:number)=>{
         const pct=Math.max(0,Math.min(100,Math.round(val)));
         if(!started){
-          if(pct>=100) return;  // пропускаем преждевременный complete
+          if(pct>=100) return;
           started=true;
         }
         if(pct!==last){
@@ -524,7 +668,6 @@ ipcMain.handle('launch-minecraft',async(_e,opts:LaunchOpts)=>{
         }
       };
     })();
-    /* ╰────────────────────────────────────────╯ */
 
     const onAnyProgress=(payload:ProgressObj|number,src:string)=>{
       debugProgress(src,payload);
@@ -539,11 +682,9 @@ ipcMain.handle('launch-minecraft',async(_e,opts:LaunchOpts)=>{
 
     launcher.on('progress',p=>onAnyProgress(p as ProgressObj,'progress'));
     launcher.on('download-status',s=>onAnyProgress(s as ProgressObj,'download-status'));
-
     launcher.on('debug',(d:any)=>{
-      if(typeof d==='string'&&d.startsWith('Downloading')){
+      if(typeof d==='string'&&d.startsWith('Downloading'))
         debugProgress('debug-line',d);
-      }
       log.debug('[MC]',d);
     });
 
@@ -573,10 +714,6 @@ ipcMain.handle('launch-minecraft',async(_e,opts:LaunchOpts)=>{
 
 /* ───────── IPC: close-window ───────── */
 ipcMain.handle('close-window', async () => {
-  log.info('[IPC] close-window');          // необязательно, но полезно
-  if (win && !win.isDestroyed()) {
-    win.close();                           // закроет текущее окно
-  }
-  // если хотим выйти целиком:
-  // else app.quit();
+  log.info('[IPC] close-window');
+  if (win && !win.isDestroyed()) win.close();
 });
