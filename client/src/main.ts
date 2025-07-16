@@ -287,7 +287,8 @@ async function ensureJava(w:BrowserWindow):Promise<string>{
     let link:string;
     try{link=await fetchTemurinLink(os,arch,img);}
     catch{link=redirectApi(os,arch,img);}
-    const ext = link.endsWith('.zip')?'.zip':'.tar.gz';
+    const ext = os === 'windows' ? '.zip' :
+            link.endsWith('.zip') ? '.zip' : '.tar.gz';
     await downloadWithRetry('java',link,archive+ext,w);
     return ext;
   };
