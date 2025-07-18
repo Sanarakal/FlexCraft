@@ -1,0 +1,123 @@
+/* ────────────────────────────────────────────────
+   Minecraft‑style login (v3)
+   – бесшовный «гуляющий» фон, мягкая виньетка
+   – весь интерфейс прежний
+   ─────────────────────────────────────────────── */
+
+/* ← шрифт */
+@font-face {
+  font-family:"Minecraftia";
+  src:url("./assets/fonts/Minecraft-Bold.otf") format("otf");
+  font-display:swap;
+}
+
+:root{
+  --mc-green :#3c8527;
+  --mc-shadow:#000000c0;
+  --mc-error :#d83321;
+  --mc-light :#ececec;
+  --mc-border:#7b7b7b;
+  --mc-panel :#c6c6c6;
+}
+
+/* === сцена и фон === */
+.mc-scene{
+  position:relative;
+  min-height:100vh;
+  overflow:hidden;
+  display:grid;
+  place-items:center;
+  background:#000;           /* fallback пока картинка не загрузилась */
+}
+
+/* 🎞️ динамический фон */
+.mc-parallax{
+  position:absolute;
+  top:-50%; left:-50%;       /* выносим края за экран, чтоб шва не было видно */
+  width:300%; height:300%;   /* огромный холст */
+  background:url("./assets/background.jpg") repeat-x center/cover;
+  filter:brightness(.8);
+  animation:roam 120s linear infinite;
+  will-change:transform,background-position;
+  pointer-events:none;
+  z-index:0;
+}
+
+/* Панорама «ходит»: X — полный круг, Y — лёгкая качка, scale — приближение */
+@keyframes roam{
+  0%   { transform:translate(  0%,   0%) scale(1);      background-position:0   0; }
+  20%  { transform:translate(-33%,  -4%) scale(1.04);   background-position:-700px -40px; }
+  40%  { transform:translate(-66%,   3%) scale(1.02);   background-position:-1400px 30px; }
+  60%  { transform:translate(-100%, -2%) scale(1.05);   background-position:-2100px -20px;}
+  80%  { transform:translate(-66%,   5%) scale(1.03);   background-position:-1400px 40px; }
+  100% { transform:translate(  0%,   0%) scale(1);      background-position:0   0; }
+}
+
+/* === виньетка поверх всего === */
+.mc-scene::after{
+  content:"";
+  position:absolute; inset:0;
+  background:radial-gradient(ellipse at center,
+             transparent 0%,
+             rgba(0,0,0,.25) 60%,
+             rgba(0,0,0,.55) 100%);
+  pointer-events:none;
+  z-index:2;
+}
+
+/* === карточка авторизации (как было) === */
+.mc-login-card{
+  position:relative;
+  width:380px; padding:34px 36px 28px;
+  display:grid; gap:14px;
+  font-family:"Minecraftia",monospace;
+  color:var(--mc-green); text-shadow:1px 1px 0 #000;
+  background:var(--mc-panel);
+  border:4px solid #000;
+  box-shadow:0 0 0 4px #4d4d4d,8px 8px 0 0 #000;
+  z-index:3;
+}
+
+.mc-title {
+  text-align: center;
+  line-height: 1.2;
+  margin: -4px 0 8px;
+}
+
+/* === поля ввода === */
+.mc-input {
+  padding: 6px 8px;
+  font: inherit;
+  color: var(--mc-dark);
+  background: var(--mc-light);
+  border: 2px solid var(--mc-border);
+  outline: none;
+  box-shadow: inset 0 0 0 1px #fff;
+}
+.mc-input:focus {
+  border-color: var(--mc-green);
+  box-shadow: inset 0 0 0 1px var(--mc-green);
+}
+
+/* === кнопка === */
+.mc-btn {
+  cursor: pointer;
+  font: inherit;
+  padding: 8px 14px;
+  color: var(--mc-dark);
+  background: var(--mc-light);
+  border: 2px solid var(--mc-border);
+  box-shadow: 0 4px 0 #000;
+  transition: transform .06s, box-shadow .06s, background .15s;
+}
+.mc-btn:hover       { background: #fff; }
+.mc-btn:active      { transform: translateY(4px); box-shadow: none; }
+
+/* === доп. элементы === */
+.mc-error  { color: var(--mc-error); margin: 0; }
+.mc-switch {
+  cursor: pointer;
+  color: #55ffff;
+  text-align: center;
+}
+.mc-switch:hover { text-decoration: underline; }

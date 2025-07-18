@@ -8,6 +8,7 @@
 /*     • launch‑minecraft now calls ensureCustomModpack()                     *
 /*  2025‑07‑16                                                                */
 /* -------------------------------------------------------------------------- */
+interface LaunchOpts {}
 
 import { app, BrowserWindow, ipcMain }          from 'electron';
 import {
@@ -26,14 +27,16 @@ import log                                      from 'electron-log';
 import { pipeline }                             from 'node:stream';
 import { promisify }                            from 'node:util';
 import { createHash }                           from 'node:crypto';
+import jwt                                      from 'jsonwebtoken';
 
+const JWT_SECRET = process.env.JWT_SECRET!;     // !  – если не задано → сразу ошибка
 const pump = promisify(pipeline);
 
 /* ──────────────── пользовательский мод‑пак ──────────────── *
  * Включается **только** если указана переменная MODPACK_URL. */
-const MODPACK_VER   = process.env.MODPACK_VER   ?? '1.0';
-const MODPACK_URL   = process.env.MODPACK_URL   ?? '';     // «»  → пропустить загрузку
-const MODPACK_SHA256= process.env.MODPACK_SHA256?? '';     // «»  → пропустить проверку
+const MODPACK_VER   = process.env.MODPACK_VER   ?? '1.13';
+const MODPACK_URL   = process.env.MODPACK_URL   ?? 'https://flex-craft.ru/0_modpack.zip';     // «»  → пропустить загрузку
+const MODPACK_SHA256= process.env.MODPACK_SHA256?? '86d77db8eaedb113dee914cdc378bd1c77d54600fa2946e858ba5b59758e21bc';     // «»  → пропустить проверку
 
 /* ───────────────────── webpack constants ───────────────────── */
 declare const MAIN_WINDOW_WEBPACK_ENTRY        : string;
@@ -101,8 +104,9 @@ const DEBUG_PROGRESS = !!process.env.LAUNCHER_DEBUG;
 /* ───────────────────────────── типы ──────────────────────────── */
 type OS   = 'windows' | 'macos' | 'linux';
 type Arch = 'x64' | 'aarch64';
+
 interface FixedServer { name:string; ip:string; port:number }
-interface LaunchOpts  { username:string; mode:'vanilla'|'modded'; server:FixedServer }
+interface LaunchOpts  { username:string; mode:'vanilla'|'modded'; server:FixedServer;token   : string; }
 
 type DlTag = 'java'|'forge'|'procdep'|'minecraft'|'modpack';
 
@@ -617,9 +621,21 @@ function debugProgress(tag:string,payload:any){
 }
 
 /* ───────── IPC: launch-minecraft ───────── */
-ipcMain.handle('launch-minecraft',async(_e,opts:LaunchOpts)=>{
-  if(!win) return;
-  const w=win!;
+ipcMain.handle('launch-minecraft', async (_e, opts: LaunchOpts) => {
+  if (!win) return;
+  const w = win!;
+
+  /* ✅  Упрощённая валидация JWT (без подписи) */
+  try {
+    const decoded = jwt.decode(opts.token) as { username:string; exp:number } | null;
+    if (!decoded) throw new Error('bad jwt');
+    if (decoded.username !== opts.username) throw new Error('username mismatch');
+    if (decoded.exp < Date.now() / 1000)   throw new Error('token expired');
+  } catch (err) {
+    log.warn('[AUTH] jwt check failed:', err);
+    throw new Error('Неверный или просроченный токен');
+  }
+
 
   try{
     writeServersDat(ROOT,opts.server);
