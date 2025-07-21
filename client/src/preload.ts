@@ -1,15 +1,26 @@
-import { contextBridge, ipcRenderer, IpcRendererEvent } from 'electron';
+/* ────────────────────────────────────────────────────────────────
+ * preload.ts – expose API → window.electron
+ * дата: 19 Jul 2025
+ * ──────────────────────────────────────────────────────────────── */
+import {
+  contextBridge,
+  ipcRenderer,
+  IpcRendererEvent,
+} from 'electron';
 
-type Listener = (ev: IpcRendererEvent, ...args: unknown[]) => void;
+type Listener = (e: IpcRendererEvent, ...args: unknown[]) => void;
 
 contextBridge.exposeInMainWorld('electron', {
-  /** слушаем однократно либо постоянно */
-  on   : (channel: string, listener: Listener) => ipcRenderer.on(channel, listener),
+  /* events */
+  on : (c: string, fn: Listener) => ipcRenderer.on(c, fn),
+  off: (c: string, fn: Listener) => ipcRenderer.removeListener(c, fn),
 
-  /** отписываем слушатель (Electron ≥ 14: removeListener ≈ off) */
-  off  : (channel: string, listener: Listener) => ipcRenderer.removeListener(channel, listener),
+  /* invoke */
+  invoke: (c: string, ...args: unknown[]) => ipcRenderer.invoke(c, ...args),
 
-  /** invoke/handle RPC */
-  invoke: (channel: string, ...args: unknown[]) => ipcRenderer.invoke(channel, ...args),
+  /* snapshot (для renderer‑отладчика) */
   snapshot: () => ipcRenderer.invoke('snapshot-ui'),
+
+  /* безопасное открытие ссылок через main‑process */
+  openExternal: (url: string) => ipcRenderer.invoke('open-external', url),
 });

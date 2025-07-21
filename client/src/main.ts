@@ -10,7 +10,8 @@
 /* -------------------------------------------------------------------------- */
 interface LaunchOpts {}
 
-import { app, BrowserWindow, ipcMain }          from 'electron';
+import { app, BrowserWindow, ipcMain, shell } from 'electron';
+
 import {
   createWriteStream, createReadStream, existsSync, mkdirSync,
   readdirSync, rmSync, writeFileSync, readFileSync, renameSync,
@@ -31,6 +32,12 @@ import jwt                                      from 'jsonwebtoken';
 
 const JWT_SECRET = process.env.JWT_SECRET!;     // !  – если не задано → сразу ошибка
 const pump = promisify(pipeline);
+
+
+ipcMain.handle('open-external', async (_ev, url: string) => {
+  await shell.openExternal(url);
+});
+/* ──────────────────────────────────────────────────────────────────── */
 
 /* ──────────────── пользовательский мод‑пак ──────────────── *
  * Включается **только** если указана переменная MODPACK_URL. */

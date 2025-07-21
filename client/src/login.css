@@ -1,97 +1,149 @@
 /* ────────────────────────────────────────────────
-   Minecraft‑style login (v3)
-   – бесшовный «гуляющий» фон, мягкая виньетка
-   – весь интерфейс прежний
+   login.css • panorama + premium glass UI
    ─────────────────────────────────────────────── */
 
-/* ← шрифт */
+/* ==== Шрифт ==== */
 @font-face {
-  font-family:"Minecraftia";
-  src:url("./assets/fonts/Minecraft-Bold.otf") format("otf");
-  font-display:swap;
+  font-family: "Minecraftia";
+  src: url("./assets/fonts/Minecraft-Bold.otf") format("opentype");
+  font-display: swap;
 }
 
-:root{
-  --mc-green :#3c8527;
-  --mc-shadow:#000000c0;
-  --mc-error :#d83321;
-  --mc-light :#ececec;
-  --mc-border:#7b7b7b;
-  --mc-panel :#c6c6c6;
+/* ==== Цвета ==== */
+:root {
+  --mc-green  : #3c8527;
+  --mc-cyan   : #04d9ff;
+  --mc-error  : #ff5555;
+  --mc-light  : #ececec;
+  --mc-border : #7b7b7b;
 }
 
-/* === сцена и фон === */
-.mc-scene{
-  position:relative;
-  min-height:100vh;
-  overflow:hidden;
-  display:grid;
-  place-items:center;
-  background:#000;           /* fallback пока картинка не загрузилась */
+/* ==== Сцена ==== */
+.mc-scene {
+  position: fixed;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
 }
 
-/* 🎞️ динамический фон */
-.mc-parallax{
-  position:absolute;
-  top:-50%; left:-50%;       /* выносим края за экран, чтоб шва не было видно */
-  width:300%; height:300%;   /* огромный холст */
-  background:url("./assets/background.jpg") repeat-x center/cover;
-  filter:brightness(.8);
-  animation:roam 120s linear infinite;
-  will-change:transform,background-position;
-  pointer-events:none;
-  z-index:0;
+/* ==== Фон панорамы ==== */
+.panorama {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: 150vw;
+  height: 130vh;
+  background: url("./assets/background.jpg") center / cover no-repeat;
+  transform: translate3d(-50%, -50%, 0) scale(1.05);
+  animation: drift 36s ease-in-out infinite alternate;
+  will-change: transform;
+  pointer-events: none;
 }
 
-/* Панорама «ходит»: X — полный круг, Y — лёгкая качка, scale — приближение */
-@keyframes roam{
-  0%   { transform:translate(  0%,   0%) scale(1);      background-position:0   0; }
-  20%  { transform:translate(-33%,  -4%) scale(1.04);   background-position:-700px -40px; }
-  40%  { transform:translate(-66%,   3%) scale(1.02);   background-position:-1400px 30px; }
-  60%  { transform:translate(-100%, -2%) scale(1.05);   background-position:-2100px -20px;}
-  80%  { transform:translate(-66%,   5%) scale(1.03);   background-position:-1400px 40px; }
-  100% { transform:translate(  0%,   0%) scale(1);      background-position:0   0; }
+@keyframes drift {
+  0%   { transform: translate3d(-50%, -50%, 0) scale(1.05); }
+  25%  { transform: translate3d(-46%, -52%, 0) scale(1.09); }
+  50%  { transform: translate3d(-44%, -50%, 0) scale(1.11); }
+  75%  { transform: translate3d(-49%, -48%, 0) scale(1.09); }
+  100% { transform: translate3d(-56%, -50%, 0) scale(1.05); }
 }
 
-/* === виньетка поверх всего === */
-.mc-scene::after{
-  content:"";
-  position:absolute; inset:0;
-  background:radial-gradient(ellipse at center,
-             transparent 0%,
-             rgba(0,0,0,.25) 60%,
-             rgba(0,0,0,.55) 100%);
-  pointer-events:none;
-  z-index:2;
+/* затемняющая виньетка */
+.mc-scene::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: radial-gradient(circle at center,
+              transparent 60%,
+              rgba(0,0,0,0.55) 100%);
+  pointer-events: none;
+  z-index: 1;
 }
 
-/* === карточка авторизации (как было) === */
-.mc-login-card{
-  position:relative;
-  width:380px; padding:34px 36px 28px;
-  display:grid; gap:14px;
-  font-family:"Minecraftia",monospace;
-  color:var(--mc-green); text-shadow:1px 1px 0 #000;
-  background:var(--mc-panel);
-  border:4px solid #000;
-  box-shadow:0 0 0 4px #4d4d4d,8px 8px 0 0 #000;
-  z-index:3;
+/* ==== Премиум‑glass карточка ==== */
+.mc-login-card {
+  position: relative;
+  width: 460px;
+  padding: 60px 64px 50px;
+  display: grid;
+  gap: 24px;
+
+  font-family: "Minecraftia", monospace;
+  color: var(--mc-green);
+  text-shadow: 1px 1px 0 #000;
+
+  /* «фрост»‑фон: двойной градиент + прозрачность */
+  background:
+    linear-gradient(135deg, rgba(255,255,255,0.18) 0%, rgba(255,255,255,0.05) 100%),
+    rgba(255,255,255,0.04);
+  backdrop-filter: blur(14px) saturate(160%);
+  border-radius: 26px;
+  overflow: hidden;
+
+  /* объёмная тень + «пиксель»‑отброс */
+  box-shadow:
+    0 0 0 3px rgba(0,0,0,0.65),
+    0 14px 42px rgba(0,0,0,0.55),
+    8px 8px 0 #000;
+
+  z-index: 2;
 }
 
+/* тонкая светлая окантовка (глянец) */
+.mc-login-card::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  padding: 1px;                        /* ширина рамки */
+  background: linear-gradient(135deg,
+               rgba(255,255,255,0.55) 0%,
+               rgba(255,255,255,0.1) 100%);
+  /* «выезаем» середину, оставляя только обводку */
+  -webkit-mask: 
+    linear-gradient(#000 0 0) content-box,
+    linear-gradient(#000 0 0);
+  -webkit-mask-composite: xor;
+          mask-composite: exclude;
+  pointer-events: none;
+}
+
+/* пиксельная сетка‑оверлей */
+.mc-login-card::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: repeating-linear-gradient(90deg,
+              transparent 0 3px,
+              rgba(0,0,0,0.06) 3px 4px),
+              repeating-linear-gradient(0deg,
+              transparent 0 3px,
+              rgba(0,0,0,0.06) 3px 4px);
+  pointer-events: none;
+  mix-blend-mode: overlay;
+}
+
+/* ==== Заголовок ==== */
 .mc-title {
   text-align: center;
-  line-height: 1.2;
-  margin: -4px 0 8px;
+  margin: 0;
+  font-size: 1.6rem;     /* + крупнее */
+  letter-spacing: 1px;
+  line-height: 1.25;
 }
 
-/* === поля ввода === */
+/* ==== Поля ввода ==== */
 .mc-input {
-  padding: 6px 8px;
+  padding: 12px 14px;
   font: inherit;
-  color: var(--mc-dark);
+  color: #111;
   background: var(--mc-light);
   border: 2px solid var(--mc-border);
+  border-radius: 10px;
   outline: none;
+  transition: border-color 0.2s, box-shadow 0.2s;
   box-shadow: inset 0 0 0 1px #fff;
 }
 .mc-input:focus {
@@ -99,25 +151,44 @@
   box-shadow: inset 0 0 0 1px var(--mc-green);
 }
 
-/* === кнопка === */
+/* ==== Кнопка ==== */
 .mc-btn {
   cursor: pointer;
   font: inherit;
-  padding: 8px 14px;
-  color: var(--mc-dark);
-  background: var(--mc-light);
-  border: 2px solid var(--mc-border);
-  box-shadow: 0 4px 0 #000;
-  transition: transform .06s, box-shadow .06s, background .15s;
+  padding: 12px 20px;
+  color: #fff;
+  background: var(--mc-green);
+  border: none;
+  border-radius: 10px;
+  box-shadow: 0 2px 0 #000;
+  transition: transform 0.1s, box-shadow 0.2s, background 0.2s;
 }
-.mc-btn:hover       { background: #fff; }
-.mc-btn:active      { transform: translateY(4px); box-shadow: none; }
+.mc-btn:hover { background: #49d24e; transform: translateY(-2px); }
+.mc-btn:active {
+  transform: translateY(2px);
+  box-shadow: 0 1px 0 #000;
+}
 
-/* === доп. элементы === */
-.mc-error  { color: var(--mc-error); margin: 0; }
-.mc-switch {
-  cursor: pointer;
-  color: #55ffff;
+/* ==== Ошибка ==== */
+.mc-error {
+  color: var(--mc-error);
+  margin: -4px 0 -2px;
   text-align: center;
 }
-.mc-switch:hover { text-decoration: underline; }
+
+/* ==== Переключатель режимов ==== */
+.mc-switch {
+  cursor: pointer;
+  color: var(--mc-cyan);
+  text-align: center;
+  margin-top: 6px;
+}
+.mc-switch:hover {
+  color: #55ffff;
+  text-decoration: underline;
+}
+
+/* ==== prefers-reduced-motion ==== */
+@media (prefers-reduced-motion: reduce) {
+  .panorama { animation: none; }
+}

@@ -2,7 +2,7 @@
   "compilerOptions": {
     "target": "ES2021",
     "allowJs": true,
-    "module": "commonjs",
+    "module": "esnext",
     "strict":    true,  
     "skipLibCheck": true,
     "esModuleInterop": true,
@@ -14,6 +14,7 @@
     "moduleResolution": "node",
     "resolveJsonModule": true,
     "jsx": "react-jsx",
+    "types": ["vite/client"], 
     "paths": {
       "*": ["node_modules/*"]
     }
